@@ -1,0 +1,174 @@
+package pppp.g1;
+
+import java.util.Random;
+
+import pppp.sim.Move;
+import pppp.sim.Point;
+
+
+public class Player implements pppp.sim.Player {
+
+	// see details below
+	private int id = -1;
+	private int side = 0;
+	private int[] pos_index = null;
+	private Point[][] pos = null;
+	private Point[] random_pos = null;
+	private Point[] last_rat_pos = null;
+	private Random gen = new Random();
+
+	// create move towards specified destination
+	private static Move move(Point src, Point dst, boolean play)
+	{
+		double dx = dst.x - src.x;
+		double dy = dst.y - src.y;
+		double length = Math.sqrt(dx * dx + dy * dy);
+		double limit = play ? 0.1 : 0.5;
+		if (length > limit) {
+			dx = (dx * limit) / length;
+			dy = (dy * limit) / length;
+		}
+
+		return new Move(dx, dy, play);
+	}
+	
+	// generate point after negating or swapping coordinates
+	private static Point point(double x, double y,
+	                           boolean neg_y, boolean swap_xy)
+	{
+		if (neg_y) y = -y;
+		return swap_xy ? new Point(y, x) : new Point(x, y);
+	}
+
+	private boolean in_square(double x, double y){
+		if (x>-side*0.5 && x<side*0.5 && y>-side*0.5 && y<side*0.5)
+			return true;
+		else 
+			return false;
+	}
+	// find the nearest encounter position between pipers and rats
+	private Point find_nearest_rat(Point piper, boolean play, Point[] rats, double time_limit)
+	{
+		double time = Double.MAX_VALUE;
+		double x = 0;
+		double y = 0;
+		Point ans = new Point(x,y);
+
+		for(int i=0;i< rats.length;i++){
+
+			double dist_x = rats[i].x-piper.x;
+			double dist_y = rats[i].y-piper.y;
+			double speed_x = rats[i].x-last_rat_pos[i].x;
+			double speed_y = rats[i].y-last_rat_pos[i].y;
+			double dist = Math.sqrt(dist_x*dist_x+dist_y*dist_y);
+			double speed_vertical = speed_y*dist_y/dist+speed_x*dist_x/dist;
+			double speed_parallel = speed_x*dist_y/dist-speed_y*dist_x/dist;
+
+			if (play && dist <= 10) {
+				continue;
+			}
+
+			double piper_speed = 0.5;
+			if (play) {
+				piper_speed = 0.1;
+			}
+			double time_est = dist/
+					(Math.sqrt(piper_speed*piper_speed-speed_parallel*speed_parallel)-speed_vertical);
+			
+			if (0< time_est && time_est < time){
+				time = time_est;
+				double dst_x =rats[i].x + time_est*speed_x;//speed_parallel*time_est* dist_y / dist;
+				double dst_y =rats[i].y + time_est*speed_y;//speed_parallel*time_est* dist_x / dist;
+				if (in_square(dst_x,dst_y)){
+					ans = new Point(dst_x,dst_y);
+				}
+			}
+		}
+		
+		if (time > time_limit && play) {
+			return null;
+		}
+
+		return ans;
+	}
+	
+	// specify location that the player will alternate between
+	public void init(int id, int side, long turns,
+	                 Point[][] pipers, Point[] rats)
+	{
+		this.id = id;
+		this.side = side;
+		int n_pipers = pipers[id].length;
+		pos = new Point [n_pipers][5];
+		random_pos = new Point [n_pipers];
+		pos_index = new int [n_pipers];
+		for (int p = 0 ; p != n_pipers ; ++p) {
+			// spread out at the door level
+			double door = 0.0;
+			if (n_pipers != 1) door = p * 1.8 / (n_pipers - 1) - 0.9;
+			// pick coordinate based on where the player is
+			boolean neg_y = id == 2 || id == 3;
+			boolean swap  = id == 1 || id == 3;
+			// first and third position is at the door
+			pos[p][0] = pos[p][2] = point(door, side * 0.5, neg_y, swap);
+			// second position is chosen randomly in the rat moving area
+			pos[p][1] = null;
+			// fourth and fifth positions are outside the rat moving area
+			pos[p][3] = point(door * -6, side * 0.5 + 3, neg_y, swap);
+			pos[p][4] = point(door * +6, side * 0.5 + 3, neg_y, swap);
+			// start with first position
+			pos_index[p] = 0;
+		}
+		last_rat_pos = new Point[rats.length];
+		for (int i = 0 ; i != rats.length ; ++i) {
+			last_rat_pos[i] = new Point(rats[i].x,rats[i].y);
+		}
+	}
+
+	// return next locations on last argument
+	public void play(Point[][] pipers, boolean[][] pipers_played,
+	                 Point[] rats, Move[] moves)
+	{
+		boolean play;
+
+		for (int p = 0 ; p != pipers[id].length ; ++p) {
+			Point src = pipers[id][p];
+			Point dst = pos[p][pos_index[p]];
+			// if null then get random position
+			if (dst == null) dst = random_pos[p];
+			play = pos_index[p] > 1;
+
+
+			// if position is reached
+			if (Math.abs(src.x - dst.x) < 0.000001 &&
+			    Math.abs(src.y - dst.y) < 0.000001) {
+				// discard random position
+				if (dst == random_pos[p]) random_pos[p] = null;
+				// get next position
+				if (++pos_index[p] == pos[p].length) pos_index[p] = 0;
+				dst = pos[p][pos_index[p]];
+				play = pos_index[p] > 1;
+
+				// got nearest rat, see if any rats nearby
+				if (pos_index[p] == 2) {
+					Point rat = find_nearest_rat(pipers[id][p], true, rats, 5);
+					if (rat != null) {
+						random_pos[p] = dst = rat;
+						pos_index[p]--;
+					}
+				}
+
+				// generate a new position if random
+				if (dst == null) {
+					random_pos[p] = dst = find_nearest_rat(pipers[id][p], false, rats, Double.MAX_VALUE);
+				}
+			}
+			// get move towards position
+			moves[p] = move(src, dst, play);
+		}
+
+		for (int i = 0 ; i != rats.length ; ++i) {
+			last_rat_pos[i] = new Point(rats[i].x,rats[i].y);
+		}
+	}
+}
